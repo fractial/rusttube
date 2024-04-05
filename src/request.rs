@@ -1,6 +1,5 @@
 use std::error::Error;
 use reqwest::{Client, header::{HeaderMap, HeaderValue, USER_AGENT}};
-use futures::stream::{self, StreamExt};
 use std::time::Instant;
 
 pub enum ResponseType {
@@ -9,8 +8,6 @@ pub enum ResponseType {
 }
 
 pub async fn get_request(url: &str, response_type: Option<ResponseType>) -> Result<Vec<u8>, Box<dyn Error>> {
-    let now = Instant::now();
-
     let client = Client::new();
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("request"));
@@ -28,24 +25,18 @@ pub async fn get_request(url: &str, response_type: Option<ResponseType>) -> Resu
         ResponseType::Default => {
             let body = response.text().await?;
 
-            let elapsed = now.elapsed();
-            println!("{:?}", elapsed);
-
             Ok(body.into_bytes())
         }
         ResponseType::Stream => {
-            let mut data = Vec::new();
+            let now = Instant::now();
 
-            let mut stream = response.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                data.extend_from_slice(&chunk);
-            }
+            let data = response.bytes().await.unwrap();
+            let body = data.to_vec();
 
             let elapsed = now.elapsed();
             println!("{:?}", elapsed);
 
-            Ok(data)
+            Ok(body)
         }
     }
 }
