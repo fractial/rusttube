@@ -21,7 +21,7 @@ async fn download(id: &str) -> Result<(), Box<dyn Error>> {
 
     let mut download_dir = env::var("USERPROFILE").expect("Failed to find `HOME` directory");
     download_dir.push_str("/Music");
-    let file_path = format!("{}/{}.mp4", download_dir, name);
+    let file_path = format!("{}/{}.mp3", download_dir, name);
     let mut file = File::create(file_path).expect("Error creating file");
 
     let stream = get_request(&stream_url, Some(Stream)).await?;
