@@ -2,49 +2,56 @@ use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
+use std::string::ToString;
+use std::time::Instant;
 use serde_json::{from_str, Value};
-use crate::request::{get_request, ResponseType::Stream};
+use request::get_request;
+use tokio;
 
 mod request;
 
+const URL: &str = "https://piped-api.lunar.icu/";
+
 async fn download(id: &str) -> Result<(), Box<dyn Error>> {
-    let url = format!("https://piped-api.lunar.icu/streams/{}", id);
-    println!("{}", url);
+    let time = Instant::now();
 
-    let result = get_request(&url, None).await?;
-    let body = String::from_utf8_lossy(&result).to_string();
+    let mut url = String::from(URL);
+    url.push_str(format!("streams/{}", id).as_str());
+    print!("{} ", url);
 
-    let parsed: Value = from_str(&body).expect("Failed to parse JSON");
-    let title = parsed["title"].as_str().unwrap_or("default");
-    let name = title.replace(" ", "");
-    let stream_url = parsed["audioStreams"][3]["url"].as_str().unwrap_or("default");
+    let response = get_request(&url).await?;
+    let body = response.text().await?;
+    let data: Value = from_str(&body)?;
 
-    let mut download_dir = env::var("USERPROFILE").expect("Failed to find `HOME` directory");
-    download_dir.push_str("/Music");
-    let file_path = format!("{}/{}.mp3", download_dir, name);
+    let title = data["title"].to_string().replace("\"", "").replace(" ", "");
+    let audio_stream = data["audioStreams"][3]["url"].to_string().replace("\"", "");
+    let stream = get_request(&audio_stream).await?.bytes().await?.to_vec();
+
+    let mut dir = env::var("USERPROFILE")?;
+    dir.push_str("/Music");
+    let file_type = "mp4";
+    let file_path = format!("{}/{}.{}", dir, title, file_type);
     let mut file = File::create(file_path).expect("Error creating file");
-
-    let stream = get_request(&stream_url, Some(Stream)).await?;
     file.write_all(&stream)?;
+
+    println!("{:?}", time.elapsed());
 
     Ok(())
 }
 
-async fn playlist(id: &str) -> Result<(), Box<dyn Error>> {
-    let url = format!("https://piped-api.lunar.icu/playlists/{}", id);
+async fn download_playlist(id: &str) -> Result<(), Box<dyn Error>> {
+    let mut url = String::from(URL);
+    url.push_str(format!("playlists/{}", id).as_str());
     println!("{}", url);
 
-    let result = get_request(&url, None).await?;
-    let body = String::from_utf8_lossy(&result).to_string();
-
-    let parsed: Value = from_str(&body).expect("Failed to parse JSON");
-    let streams = parsed["relatedStreams"].as_array().expect("Failed to parse `relatedStreams`");
+    let response = get_request(&url).await?;
+    let body = response.text().await?;
+    let data: Value = from_str(&body)?;
+    let streams = data["relatedStreams"].as_array().expect("");
 
     for stream in streams {
-        let stream_uri = stream["url"].to_string();
-        let stream_url = stream_uri.trim_matches('"').to_string();
-        let stream_id = stream_url.replace("/watch?v=", "");
-        let _ = download(&stream_id).await;
+        let id = stream["url"].to_string().replace("\"", "").replace("/watch?v=", "");
+        download(&id).await?;
     }
 
     Ok(())
@@ -55,13 +62,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     let id = &args[1];
 
-    if args.contains(&String::from("--playlist")) || args.contains(&String::from("-p")) {
-        let _ = playlist(id).await;
-
+    if args.iter().any(|arg| arg == "--playlist" || arg == "-p") {
+        download_playlist(id).await?;
         return Ok(());
     }
 
-    let _ = download(&id).await;
+    download(id).await?;
 
     Ok(())
 }
