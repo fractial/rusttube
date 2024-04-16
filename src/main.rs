@@ -58,7 +58,7 @@ async fn download_playlist(url_instance: &str, id: &str) -> Result<(), Box<dyn E
 
     for stream in streams {
         let id = stream["url"].to_string().replace("\"", "").replace("/watch?v=", "");
-        download(&url, &id).await?;
+        download(url_instance, &id).await?;
     }
 
     Ok(())
@@ -78,11 +78,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if args.iter().any(|arg| arg == "--playlist" || arg == "-p") {
-        download_playlist(url, id).await?;
+        download_playlist(&url, id).await?;
         return Ok(());
     }
 
-    download(url, id).await?;
+    download(&url, id).await?;
 
     Ok(())
 }
