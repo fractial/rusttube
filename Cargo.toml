@@ -13,6 +13,7 @@ tokio = { version = "1.37.0", features = ["full"] }
 log = "0.4.21"
 futures = "0.3.30"
 regex = "1.10.4"
+url = "2.5.0"
 
 [build-dependencies]
 winres = "0.1.12"

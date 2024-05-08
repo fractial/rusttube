@@ -1,128 +1,113 @@
 use std::env;
 use std::error::Error;
-use std::fs::File;
-use std::io::{stdin, Write};
-use std::string::ToString;
+use std::io::Write;
 use std::time::Instant;
-use regex::Regex;
 use serde_json::{from_str, Value};
-use request::get_request;
-use tokio;
+use url::Url;
+use crate::request::get_request;
 
 mod request;
 
 const URL: &str = "https://pipedapi.kavin.rocks";
+const DIR: &str = "USERPROFILE";
+const TYPE: &str = "mp3";
 
-fn get_file_name(file_name: &str) -> String {
-    let pattern = Regex::new(r#"[<>:"/\\|?*]"#).unwrap();
-    pattern.replace_all(&file_name, "").to_string()
-}
-
-async fn download(url_instance: &str, id: &str) -> Result<(), Box<dyn Error>> {
+async fn download(url: &Url, id: &str) -> Result<(), Box<dyn Error>> {
     let time = Instant::now();
 
-    let mut url = String::from(url_instance);
-    url.push_str(format!("/streams/{}", id).as_str());
-    print!("{} ", url);
-
-    let response = get_request(&url).await?;
-    let body = response.text().await?;
+    let mut url = url.clone();
+    let stream_url = format!("streams/{}", &id);
+    url = url.join(&stream_url).unwrap();
+    let res = get_request(url.as_str()).await?;
+    let body = res.text().await?;
     let data: Value = from_str(&body)?;
 
-    let title = data["title"].to_string();
-    let file_name = get_file_name(&title);
-
-    print!("{} ", file_name);
-    let audio_stream = data["audioStreams"][3]["url"].to_string().replace("\"", "");
+    let name = if let Some(name) = data.get("title") {
+        name.to_string()
+    } else {
+        "unknown".to_string()
+    };
+    let file_name = get_file_name(&name);
+    let audio_stream = if let Some(audio_stream) = data["audioStreams"][3]["url"].as_str() {
+        audio_stream.to_string()
+    } else {
+        panic!("`audio_stream` doesn't exist")
+    };
     let stream = get_request(&audio_stream).await?.bytes().await?.to_vec();
+    let _ = write_file(&file_name, stream);
 
-    let mut dir = env::var("USERPROFILE")?;
+    println!("{} {} {:?}", url, file_name, time.elapsed());
+
+    Ok(())
+}
+
+async fn download_playlist(url: &Url, id: &str) -> Result<(), Box<dyn Error>> {
+    let mut url_clone = url.clone();
+    let playlist_url = format!("playlists/{}", &id);
+    url_clone = url_clone.join(&playlist_url).unwrap();
+    let res = get_request(url_clone.as_str()).await?;
+    let body = res.text().await?;
+    let data: Value = from_str(&body)?;
+    let related_streams = data["relatedStreams"].as_array().expect("failed reading `related_streams`");
+
+    for stream in related_streams {
+        let mut id = stream["url"].to_string().replace("/watch?v=", "");
+        id = get_file_name(&id);
+        download(&url, &id).await?;
+    }
+
+    Ok(())
+}
+
+fn write_file(file_name: &str, stream: Vec<u8>) -> Result<(), Box<dyn Error>> {
+    let mut dir = env::var(DIR)?;
     dir.push_str("/Music");
-    let file_type = "mp3";
+    let file_type = TYPE;
     let file_path = format!("{}/{}.{}", dir, file_name, file_type);
-    let mut file = File::create(file_path).expect("Error creating file");
+    let mut file = std::fs::File::create(file_path).expect("failed creating the file");
     file.write_all(&stream)?;
 
-    println!("{:?}", time.elapsed());
-
     Ok(())
 }
 
-async fn download_playlist(url_instance: &str, id: &str) -> Result<(), Box<dyn Error>> {
-    let mut url = String::from(url_instance);
-    url.push_str(format!("/playlists/{}", id).as_str());
-    println!("{}", url);
+fn get_file_name(file_name: &str) -> String {
+    let pattern = regex::Regex::new(r#"[<>:"/\\|?*]"#).unwrap();
 
-    let response = get_request(&url).await?;
-    let body = response.text().await?;
-    let data: Value = from_str(&body)?;
-    let streams = data["relatedStreams"].as_array().expect("");
-
-    for stream in streams {
-        let id = stream["url"].to_string().replace("\"", "").replace("/watch?v=", "");
-        download(url_instance, &id).await?;
-    }
-
-    Ok(())
-}
-
-fn read_index() -> usize {
-    let mut input = String::new();
-    stdin().read_line(&mut input).expect("");
-
-    let index: usize = input.trim().parse().expect("");
-
-    return index;
-}
-
-async fn search(url_instance: &str, search_query: &str) -> Result<(), Box<dyn Error>> {
-    let mut url = String::from(url_instance);
-    url.push_str(format!("/search?q=\"{}\"&filter=all", search_query).as_str());
-
-    let response = get_request(&url).await?;
-    let body = response.text().await?;
-    let data: Value = from_str(&body)?;
-    let items = data["items"].as_array().expect("");
-
-    for (index, item) in items.iter().enumerate() {
-        let title = item["title"].to_string();
-        println!("[{}] {}", index, title);
-    }
-
-    let index = read_index();
-    let id = items[index]["url"].to_string().replace("\"", "").replace("/watch?v=", "");
-    download(url_instance, &id).await?;
-
-    Ok(())
+    pattern.replace_all(&file_name, "").to_string()
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut url = URL;
-    let args: Vec<String> = env::args().collect();
-    let id = &args[1];
+    let args:Vec<String> = env::args().collect();
+    let mut url = Url::parse(URL).expect("parsing url failed");
+    let mut playlist = false;
 
-    if let Some(index) = args.iter().position(|arg| arg == "--instance" || arg == "-i") {
-        let url_instance = &args[index + 1];
-        if !url_instance.is_empty() {
-            url = url_instance.strip_suffix("/").unwrap_or(&url_instance);
+    for (index, arg) in args.iter().enumerate() {
+        match arg.as_str() {
+            "--instance" | "-i" => {
+                if let Some(value) = args.get(index + 1) {
+                    if let Ok(instance_url) = Url::parse(value) {
+                        url = instance_url;
+                    }
+                }
+            }
+            "--playlist" | "-p" => {
+                playlist = true;
+            }
+            _ => {}
         }
     }
 
-    if let Some(index) = args.iter().position(|arg| arg == "--search" || arg == "-s") {
-        let search_query = &args[index + 1];
-        if !search_query.is_empty() {
-            search(&url, search_query).await?;
+    println!("{url} {playlist}");
+
+    if let Some(id) = args.get(1) {
+        if playlist {
+            download_playlist(&url, id).await.expect("playlist download failed");
             return Ok(());
         }
-    }
 
-    if args.iter().any(|arg| arg == "--playlist" || arg == "-p") {
-        download_playlist(&url, id).await?;
-        return Ok(());
+        download(&url, id).await.expect("download failed");
     }
-
-    download(&url, id).await?;
 
     Ok(())
 }
