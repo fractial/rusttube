@@ -20,7 +20,7 @@ async fn download(url: &Url, id: &str) -> Result<(), Box<dyn Error>> {
     let stream_url = format!("streams/{}", &id);
     url = url.join(&stream_url).unwrap();
     let res = get_request(url.as_str()).await?.text().await?;
-    let data: Value = from_str(&body)?;
+    let data: Value = from_str(&res)?;
 
     let name = if let Some(title) = data.get("title") {
         title.to_string()
@@ -54,9 +54,8 @@ async fn download_playlist(url: &Url, id: &str) -> Result<(), Box<dyn Error>> {
     let mut clone_url = url.clone();
     let playlist_url = format!("playlists/{}", &id);
     clone_url = clone_url.join(&playlist_url).unwrap();
-    let res = get_request(clone_url.as_str()).await?;
-    let body = res.text().await?;
-    let data: Value = from_str(&body)?;
+    let res = get_request(clone_url.as_str()).await?.text().await?;
+    let data: Value = from_str(&res)?;
     let related_streams = data["relatedStreams"].as_array().expect("failed reading `related_streams`");
 
     for stream in related_streams {
